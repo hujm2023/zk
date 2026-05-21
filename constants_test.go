@@ -22,3 +22,9 @@ func TestModeString(t *testing.T) {
 		t.Errorf("standlone value should be 'standalone'")
 	}
 }
+
+func TestErrCodeSessionClosedRequiresSASLAuth(t *testing.T) {
+	if err := ErrCode(-124).toError(); err != ErrSessionClosedRequiresSASLAuth {
+		t.Fatalf("ErrCode(-124).toError() = %v, want ErrSessionClosedRequiresSASLAuth", err)
+	}
+}
