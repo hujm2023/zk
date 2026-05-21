@@ -246,11 +246,11 @@ type setMaxChildren struct {
 }
 
 type setSaslRequest struct {
-	Token string
+	Token []byte
 }
 
 type setSaslResponse struct {
-	Token string
+	Token []byte
 }
 
 type setWatchesRequest struct {
@@ -630,6 +630,8 @@ func requestStructForOp(op int32) interface{} {
 		return &multiRequest{}
 	case opReconfig:
 		return &reconfigRequest{}
+	case opSasl:
+		return &getSaslRequest{}
 	}
 	return nil
 }

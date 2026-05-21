@@ -2,6 +2,16 @@ package zk
 
 import "testing"
 
+func TestSASLACL(t *testing.T) {
+	acl := SASLACL(PermRead|PermWrite, "zk-user")
+	if len(acl) != 1 {
+		t.Fatalf("len(SASLACL) = %d, want 1", len(acl))
+	}
+	if acl[0] != (ACL{PermRead | PermWrite, "sasl", "zk-user"}) {
+		t.Fatalf("SASLACL returned %+v", acl[0])
+	}
+}
+
 func TestFormatServers(t *testing.T) {
 	t.Parallel()
 	servers := []string{"127.0.0.1:2181", "127.0.0.42", "127.0.42.1:8811"}
