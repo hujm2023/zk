@@ -24,6 +24,11 @@ func WorldACL(perms int32) []ACL {
 	return []ACL{{perms, "world", "anyone"}}
 }
 
+// SASLACL produces an ACL list for a ZooKeeper SASL-authenticated user.
+func SASLACL(perms int32, user string) []ACL {
+	return []ACL{{perms, "sasl", user}}
+}
+
 func DigestACL(perms int32, user, password string) []ACL {
 	userPass := []byte(fmt.Sprintf("%s:%s", user, password))
 	h := sha1.New()

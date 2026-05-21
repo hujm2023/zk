@@ -31,6 +31,8 @@ var ErrNoServer = errors.New("zk: could not connect to a server")
 // an invalid path. (e.g. empty path).
 var ErrInvalidPath = errors.New("zk: invalid path")
 
+var errRequestCanceled = errors.New("zk: request canceled")
+
 // DefaultLogger uses the stdlib log package for logging.
 var DefaultLogger Logger = defaultLogger{}
 
@@ -112,7 +114,9 @@ type Conn struct {
 	logger  Logger
 	logInfo bool // true if information messages are logged; false if only errors are logged
 
-	buf []byte
+	buf           []byte
+	saslDigest    *saslDigestConfig
+	saslDigestErr error
 }
 
 // connOption represents a connection option.
@@ -310,6 +314,15 @@ func WithMaxConnBufferSize(maxBufferSize int) connOption {
 	}
 }
 
+// WithSASLDigest enables ZooKeeper SASL DIGEST-MD5 username/password authentication.
+func WithSASLDigest(username, password string) connOption {
+	return func(c *Conn) {
+		config, err := newSASLDigestConfig(username, password)
+		c.saslDigest = config
+		c.saslDigestErr = err
+	}
+}
+
 // Close will submit a close request with ZK and signal the connection to stop
 // sending and receiving packets.
 func (c *Conn) Close() {
@@ -421,6 +434,36 @@ func (c *Conn) sendRequest(
 	}
 
 	return rq.recvChan, nil
+}
+
+func (c *Conn) sendRequestAndWait(
+	ctx context.Context,
+	opcode int32,
+	req interface{},
+	res interface{},
+	recvFunc func(*request, *responseHeader, error),
+) error {
+	resChan, err := c.sendRequest(opcode, req, res, recvFunc)
+	if err != nil {
+		return fmt.Errorf("failed to send %s request: %w", opName(opcode), err)
+	}
+
+	var response response
+	select {
+	case response = <-resChan:
+	case <-c.closeChan:
+		c.logger.Printf("recv closed, cancel %s request", opName(opcode))
+		return errRequestCanceled
+	case <-c.shouldQuit:
+		c.logger.Printf("should quit, cancel %s request", opName(opcode))
+		return errRequestCanceled
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if response.err != nil {
+		return fmt.Errorf("failed connection %s request: %w", opName(opcode), response.err)
+	}
+	return nil
 }
 
 func (c *Conn) loop(ctx context.Context) {
@@ -1367,6 +1410,10 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 		}
 	}
 
+	if err := resendZkSASLDigest(ctx, c); err != nil {
+		return err
+	}
+
 	c.credsMu.Lock()
 	defer c.credsMu.Unlock()
 
@@ -1381,7 +1428,8 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 		}
 		// do not use the public API for auth since it depends on the send/recv loops
 		// that are waiting for this to return
-		resChan, err := c.sendRequest(
+		err := c.sendRequestAndWait(
+			ctx,
 			opSetAuth,
 			&setAuthRequest{Type: 0,
 				Scheme: cred.scheme,
@@ -1391,25 +1439,51 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 			nil, /* recvFunc*/
 		)
 		if err != nil {
-			return fmt.Errorf("failed to send auth request: %v", err)
-		}
-
-		var res response
-		select {
-		case res = <-resChan:
-		case <-c.closeChan:
-			c.logger.Printf("recv closed, cancel re-submitting credentials")
-			return nil
-		case <-c.shouldQuit:
-			c.logger.Printf("should quit, cancel re-submitting credentials")
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		if res.err != nil {
-			return fmt.Errorf("failed connection setAuth request: %v", res.err)
+			if errors.Is(err, errRequestCanceled) {
+				return nil
+			}
+			return err
 		}
 	}
 
 	return nil
+}
+
+func resendZkSASLDigest(ctx context.Context, c *Conn) error {
+	if c.saslDigestErr != nil {
+		return c.saslDigestErr
+	}
+	if c.saslDigest == nil {
+		return nil
+	}
+
+	challenge := &setSaslResponse{}
+	if err := c.sendRequestAndWait(ctx, opSasl, &getSaslRequest{Token: []byte{}}, challenge, nil); err != nil {
+		if errors.Is(err, errRequestCanceled) {
+			return nil
+		}
+		return err
+	}
+
+	token, err := newSASLDigestResponse(c.saslDigest, challenge.Token)
+	if err != nil {
+		return err
+	}
+
+	response := &setSaslResponse{}
+	if err := c.sendRequestAndWait(ctx, opSasl, &getSaslRequest{Token: token}, response, nil); err != nil {
+		if errors.Is(err, errRequestCanceled) {
+			return nil
+		}
+		return err
+	}
+	c.sendEvent(Event{Type: EventSession, State: StateSaslAuthenticated, Server: c.Server()})
+	return nil
+}
+
+func opName(opcode int32) string {
+	if name := opNames[opcode]; name != "" {
+		return name
+	}
+	return fmt.Sprintf("op%d", opcode)
 }

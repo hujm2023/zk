@@ -2,12 +2,22 @@ package zk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestWithSASLDigestInvalidCredentials(t *testing.T) {
+	conn := &Conn{}
+	WithSASLDigest("", "secret")(conn)
+
+	if !errors.Is(conn.saslDigestErr, errSASLDigestInvalidCredentials) {
+		t.Fatalf("saslDigestErr = %v, want errSASLDigestInvalidCredentials", conn.saslDigestErr)
+	}
+}
 
 func TestIntegration_RecurringReAuthHang(t *testing.T) {
 	zkC, err := StartTestCluster(t, 3, ioutil.Discard, ioutil.Discard)
