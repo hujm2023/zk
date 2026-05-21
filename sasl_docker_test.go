@@ -63,8 +63,8 @@ func TestIntegrationSASLDigestDocker(t *testing.T) {
 	defer plainConn.Close()
 	waitForSessionState(t, plainEvents, 10*time.Second)
 
-	if _, _, err = plainConn.Get(path); err != ErrNoAuth {
-		t.Fatalf("plain Get returned %v, want ErrNoAuth", err)
+	if _, _, err = plainConn.Get(path); err != ErrSessionClosedRequiresSASLAuth {
+		t.Fatalf("plain Get returned %v, want ErrSessionClosedRequiresSASLAuth", err)
 	}
 
 	data, _, err := authConn.Get(path)
@@ -97,6 +97,7 @@ func writeSASLDockerConfig(t *testing.T, dir string) {
 		"admin.enableServer=false",
 		"4lw.commands.whitelist=*",
 		"authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider",
+		"sessionRequireClientSASLAuth=true",
 		"",
 	}, "\n")
 	if err := ioutil.WriteFile(filepath.Join(dir, "zoo.cfg"), []byte(zooCfg), 0644); err != nil {
